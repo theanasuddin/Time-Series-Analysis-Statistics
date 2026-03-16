@@ -7,57 +7,68 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import torch
+import timesfm
 
-# Import PyTorch TimesFM
-from timesfm import TimesFM_2p5_200M_torch as TimesFmTorch
-from timesfm import ForecastConfig
+torch.set_float32_matmul_precision("high")
 
 # Load Data
 data = pd.read_csv("Case_study.csv")
 Y = data["V87"].values
 
-# Split into training (1–100) and test (101–200)
+# Training = first 100, Test = next 100
 Y_train = Y[:100]
 Y_test = Y[100:]
 
-# Pad Y_train to multiple of patch size
-patch_size = 32  # default patch size for TimesFM_2p5_200M_torch
-pad_len = (patch_size - (len(Y_train) % patch_size)) % patch_size
-Y_train_padded = np.concatenate([Y_train, np.zeros(pad_len)])
+# Load TimesFM model
+model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+    "google/timesfm-2.5-200m-pytorch"
+)
 
-# Initialize TimesFM Model
-model = TimesFmTorch()
+# Compile model with config
+model.compile(
+    timesfm.ForecastConfig(
+        max_context=1024,
+        max_horizon=256,
+        normalize_inputs=True,
+        use_continuous_quantile_head=True,
+        force_flip_invariance=True,
+        infer_is_positive=True,
+        fix_quantile_crossing=True,
+    )
+)
 
-# Set max_horizon = 100
-forecast_config = ForecastConfig(max_horizon=100)
+# Zero-shot Forecast (h = 100)
+point_forecast, quantile_forecast = model.forecast(
+    horizon=100,
+    inputs=[Y_train],
+)
 
-# Compile the model
-model.compile(forecast_config=forecast_config)
-
-# Zero-Shot Forecast
-forecast_zero = model.forecast(inputs=[Y_train_padded], horizon=100)
-pred_zero = forecast_zero[0][: len(Y_test)]  # Trim extra padded points
+# Extract forecast for our single series
+pred_zero = point_forecast[0]
 
 # Compute MSE
 mse_zero = np.mean((Y_test - pred_zero) ** 2)
-print("Zero-shot MSE:", mse_zero)
+print("TimesFM Zero-shot MSE:", mse_zero)
 
-# Plot Actual vs Forecast
+# Plot Actual vs TimesFM Forecast
 plt.figure(figsize=(10, 6))
 
-# Actual series
+# Actual full series
 plt.plot(range(200), Y, label="Actual", color="black")
 
-# Zero-shot forecast (flattened)
+# TimesFM forecast (100 → 199)
 plt.plot(
     range(100, 200),
-    pred_zero.flatten(),
+    pred_zero,
     label="TimesFM Forecast (Zero-shot)",
     color="blue",
+    linewidth=2,
 )
 
 plt.xlabel("Time")
 plt.ylabel("Y")
-plt.title("TimesFM Forecast vs Actual Series (h = 100)")
+plt.title("TimesFM Zero-Shot Forecast vs Actual (h = 100)")
 plt.legend()
+plt.grid(True)
 plt.show()
